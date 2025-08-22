@@ -62,7 +62,15 @@
 
   // Leaflet map
   const map = L.map('map', { zoomControl: true, preferCanvas: true });
+
+  // Create panes to control z-order (lower number = underneath)
+  map.createPane('qpe');       map.getPane('qpe').style.zIndex = 200;   // rain
+  map.createPane('basemap');   map.getPane('basemap').style.zIndex = 300;
+  map.createPane('counties');  map.getPane('counties').style.zIndex = 450;
+  map.createPane('state');     map.getPane('state').style.zIndex = 500;
+
   const base = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    pane:'basemap',
     attribution:'&copy; OpenStreetMap contributors'
   }).addTo(map);
 
@@ -74,8 +82,9 @@
   const rfcQpe = L.esri.dynamicMapLayer({
     url: 'https://mapservices.weather.noaa.gov/raster/rest/services/obs/rfc_qpe/MapServer',
     layers: [56],
-    opacity: 0.65,
-    f: 'image'
+    opacity: 0.45,           // <-- lighter so details below show through better
+    f: 'image',
+    pane: 'qpe'
   }).addTo(map);
 
   // UI toggles
@@ -84,6 +93,7 @@
 
   // Trails layer placeholder
   const trailsLayer = L.geoJSON(null, {
+    pane: 'counties', // draw trails above basemap, below the bold state outline
     style: { color:'#0066cc', weight:3 },
     onEachFeature: (f, layer)=>{
       layer.on('click', ()=>{
@@ -121,18 +131,19 @@
     trailsToggle.checked ? trailsLayer.addTo(map) : map.removeLayer(trailsLayer);
   });
 
-  // Counties (Alabama GeoJSON service)
-  const countiesUrl = 'https://maps.alabama.gov/ALGOGIS/rest/services/Counties/MapServer/0/query?where=1%3D1&outFields=*&returnGeometry=true&f=geojson';
-  let countiesLayer = null;
+  // ===== Boundaries (Counties + State outline) with automatic fallback =====
   const countyHover = document.getElementById('countyHover');
   const backBtn = document.getElementById('backBtn');
-  let currentCounty = null;
+  let countiesLayer = null, stateLayer = null, currentCounty = null;
 
-  function styleCounty(){ return { color:'#333', weight:1, fillColor:'#ffd54d', fillOpacity:0.10 }; }
+  function styleCounty(){ return { color:'#333', weight:1.5, fillOpacity:0, opacity:0.9 }; } // outline only
+  function styleCountyHover(){ return { weight:2.5, color:'#111' }; }
+  function styleState(){ return { color:'#000', weight:2.5, fillOpacity:0, opacity:1 }; }       // bold state outline
+
   function highlightCounty(e){
     const layer = e.target;
-    layer.setStyle({ weight: 2, fillOpacity: 0.22 });
-    const n = (layer.feature.properties.NAME || layer.feature.properties.NAME10 || layer.feature.properties.NAME20 || '').toString();
+    layer.setStyle(styleCountyHover());
+    const n = (layer.feature.properties.NAME || layer.feature.properties.NAME10 || layer.feature.properties.NAME20 || layer.feature.properties.NAMELSAD || '').toString();
     if (n) { countyHover.textContent = n + ' County'; countyHover.style.display='block'; }
   }
   function resetHighlight(e){
@@ -151,18 +162,45 @@
     layer.on({ mouseover: highlightCounty, mouseout: resetHighlight, click: zoomCounty });
   }
 
-  fetch(countiesUrl)
-    .then(r=>{
-      if(!r.ok) throw new Error('County service unavailable ('+r.status+')');
-      return r.json();
-    })
-    .then(geojson=>{
-      countiesLayer = L.geoJSON(geojson, { style: styleCounty, onEachFeature }).addTo(map);
-    })
-    .catch(err=>{
-      showMsg('Could not load county boundaries. You can still use the statewide view.');
-      console.error('County load error', err);
-    });
+  async function tryFetch(url){
+    const r = await fetch(url, {mode:'cors'});
+    if (!r.ok) throw new Error('HTTP '+r.status);
+    return r.json();
+  }
+
+  async function loadBoundaries(){
+    // 1) Try Alabama GIS service for counties
+    const AL_COUNTIES = 'https://maps.alabama.gov/ALGOGIS/rest/services/Counties/MapServer/0/query?where=1%3D1&outFields=*&returnGeometry=true&f=geojson';
+    // 2) Fallback: U.S. Census TIGERweb for counties (STATE='01'), and state outline
+    const TIGER_COUNTIES = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/1/query?where=STATE%3D%2701%27&outFields=NAME,STATE,COUNTY,NAMELSAD&returnGeometry=true&f=geojson";
+    const TIGER_STATE    = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/0/query?where=STATE%3D%2701%27&outFields=NAME,STATE&returnGeometry=true&f=geojson";
+
+    let countiesData = null;
+    try {
+      countiesData = await tryFetch(AL_COUNTIES);
+    } catch (e) {
+      // fall back to TIGERweb
+      try {
+        countiesData = await tryFetch(TIGER_COUNTIES);
+      } catch (e2) {
+        showMsg('Could not load county boundaries. You can still use the statewide view.');
+        console.error('County load failed (both sources):', e, e2);
+      }
+    }
+
+    if (countiesData){
+      countiesLayer = L.geoJSON(countiesData, { pane:'counties', style: styleCounty, onEachFeature }).addTo(map);
+      hideMsg();
+    }
+
+    // Load state outline from TIGERweb (reliable + small)
+    try {
+      const stateData = await tryFetch(TIGER_STATE);
+      stateLayer = L.geoJSON(stateData, { pane:'state', style: styleState }).addTo(map);
+    } catch (e) {
+      console.warn('State outline failed to load:', e);
+    }
+  }
 
   backBtn.addEventListener('click', ()=>{
     currentCounty = null;
@@ -170,6 +208,8 @@
     backBtn.style.display = 'none';
     trailsLayer.clearLayers();
   });
+
+  loadBoundaries();
 
   // Overpass trails loader
   async function loadTrailsForBounds(bounds){
@@ -199,5 +239,6 @@
   }
 })();
 </script>
+
 </body>
 </html>
