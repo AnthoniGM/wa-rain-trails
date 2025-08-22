@@ -10,7 +10,7 @@
   #app { width:100%; height:100vh; position:relative; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
   #map { width:100%; height:100%; }
   .toolbar {
-    position:absolute; top:10px; left:10px; z-index:1200; /* raised above Leaflet controls */
+    position:absolute; top:10px; left:10px; z-index:1200;
     background:#fff; border-radius:12px; padding:8px 10px; box-shadow:0 2px 10px rgba(0,0,0,.2);
     display:flex; gap:8px; align-items:center; font-size:14px;
   }
@@ -70,11 +70,11 @@
 
   // Map
   const map = L.map('map', { zoomControl: true, preferCanvas: true });
-  map.zoomControl.setPosition('topright'); // move zoom so it doesn't cover the toolbar
+  map.zoomControl.setPosition('topright');
 
-  // Panes: higher zIndex draws on top
+  // Panes
   map.createPane('basemap');   map.getPane('basemap').style.zIndex   = 300;
-  map.createPane('qpe');       map.getPane('qpe').style.zIndex       = 350; // ABOVE basemap so it's visible
+  map.createPane('qpe');       map.getPane('qpe').style.zIndex       = 350;
   map.createPane('counties');  map.getPane('counties').style.zIndex  = 500;
   map.createPane('trails');    map.getPane('trails').style.zIndex    = 520;
   map.createPane('state');     map.getPane('state').style.zIndex     = 550;
@@ -88,7 +88,7 @@
   const AL_BOUNDS = [[30.137, -88.473], [35.008, -84.889]];
   map.fitBounds(AL_BOUNDS);
 
-  // NOAA 7‑day rain (now above basemap, a bit lighter)
+  // NOAA 7‑day rain
   let rfcQpe;
   try {
     rfcQpe = L.esri.dynamicMapLayer({
@@ -102,7 +102,7 @@
     showErr('Rain layer failed to initialize.');
   }
 
-  // UI toggle
+  // UI toggles
   const rainToggle = document.getElementById('rainToggle');
   rainToggle.addEventListener('change', () => {
     if (!rfcQpe) return;
@@ -187,11 +187,11 @@
   }
 
   async function loadBoundaries(){
-    // Primary: Alabama GIS
-    const AL_COUNTIES = 'https://maps.alabama.gov/ALGOGIS/rest/services/Counties/MapServer/0/query?where=1%3D1&outFields=*&returnGeometry=true&f=geojson';
-    // Fallbacks: TIGERweb
-    const TIGER_COUNTIES = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/1/query?where=STATE%3D%2701%27&outFields=NAME,STATE,COUNTY,NAMELSAD&returnGeometry=true&f=geojson";
-    const TIGER_STATE    = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/0/query?where=STATE%3D%2701%27&outFields=NAME,STATE&returnGeometry=true&f=geojson";
+    // Primary: Alabama GIS (now with outSR=4326)
+    const AL_COUNTIES = 'https://maps.alabama.gov/ALGOGIS/rest/services/Counties/MapServer/0/query?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&f=geojson';
+    // Fallbacks: TIGERweb (also force outSR=4326)
+    const TIGER_COUNTIES = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/1/query?where=STATE%3D%2701%27&outFields=NAME,STATE,COUNTY,NAMELSAD&returnGeometry=true&outSR=4326&f=geojson";
+    const TIGER_STATE    = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/0/query?where=STATE%3D%2701%27&outFields=NAME,STATE&returnGeometry=true&outSR=4326&f=geojson";
 
     let countiesData = null;
     try {
@@ -205,14 +205,18 @@
       }
     }
 
-    if (countiesData){
+    if (countiesData && countiesData.features) {
       countiesLayer = L.geoJSON(countiesData, { pane:'counties', style: styleCounty, onEachFeature }).addTo(map);
-      hideMsg(); hideErr();
+      showMsg('Loaded ' + countiesData.features.length + ' counties');
+      setTimeout(hideMsg, 1500);
+      hideErr();
     }
 
     try {
       const stateData = await tryFetch(TIGER_STATE);
-      stateLayer = L.geoJSON(stateData, { pane:'state', style: styleState }).addTo(map);
+      if (stateData) {
+        stateLayer = L.geoJSON(stateData, { pane:'state', style: styleState }).addTo(map);
+      }
     } catch (e) {
       showErr('State outline failed to load.');
     }
