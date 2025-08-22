@@ -10,23 +10,27 @@
   #app { width:100%; height:100vh; position:relative; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
   #map { width:100%; height:100%; }
   .toolbar {
-    position:absolute; top:10px; left:10px; z-index:1000;
+    position:absolute; top:10px; left:10px; z-index:1200; /* raised above Leaflet controls */
     background:#fff; border-radius:12px; padding:8px 10px; box-shadow:0 2px 10px rgba(0,0,0,.2);
     display:flex; gap:8px; align-items:center; font-size:14px;
   }
   .btn { cursor:pointer; border:none; border-radius:10px; padding:6px 10px; background:#f2f2f2; }
   .btn:hover { background:#e8e8e8; }
   .legend {
-    position:absolute; bottom:10px; left:10px; z-index:1000;
+    position:absolute; bottom:10px; left:10px; z-index:1100;
     background:#fff; border-radius:12px; padding:8px 10px; box-shadow:0 2px 10px rgba(0,0,0,.2); font-size:12px;
     max-width: 280px; line-height:1.35;
   }
-  .county-hover { position:absolute; top:10px; right:10px; z-index:1000; 
+  .county-hover { position:absolute; top:10px; right:10px; z-index:1100; 
     background:#212121; color:#fff; padding:6px 10px; border-radius:10px; opacity:0.9; display:none;}
   .back { display:none; }
   .leaflet-popup-content button.copy-btn { margin-top:6px; }
   .msg {
-    position:absolute; top:60px; left:10px; z-index:1000; background:#fff; border-left:4px solid #1976d2;
+    position:absolute; top:60px; left:10px; z-index:1100; background:#fff; border-left:4px solid #1976d2;
+    padding:8px 10px; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,.15); font-size:13px; display:none;
+  }
+  .err {
+    position:absolute; top:100px; left:10px; z-index:1100; background:#fff; border-left:4px solid #d32f2f;
     padding:8px 10px; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,.15); font-size:13px; display:none;
   }
 </style>
@@ -39,6 +43,7 @@
     <label><input id="trailsToggle" type="checkbox" checked/> Trails</label>
   </div>
   <div class="msg" id="msgBox"></div>
+  <div class="err" id="errBox"></div>
   <div class="county-hover" id="countyHover"></div>
   <div id="map"></div>
   <div class="legend">
@@ -57,17 +62,22 @@
 <script>
 (function(){
   const msg = document.getElementById('msgBox');
+  const err = document.getElementById('errBox');
   const showMsg = (t)=>{ msg.textContent=t; msg.style.display='block'; };
   const hideMsg = ()=>{ msg.style.display='none'; };
+  const showErr = (t)=>{ err.textContent=t; err.style.display='block'; console.error(t); };
+  const hideErr = ()=>{ err.style.display='none'; };
 
-  // Leaflet map
+  // Map
   const map = L.map('map', { zoomControl: true, preferCanvas: true });
+  map.zoomControl.setPosition('topright'); // move zoom so it doesn't cover the toolbar
 
-  // Create panes to control z-order (lower number = underneath)
-  map.createPane('qpe');       map.getPane('qpe').style.zIndex = 200;   // rain
-  map.createPane('basemap');   map.getPane('basemap').style.zIndex = 300;
-  map.createPane('counties');  map.getPane('counties').style.zIndex = 450;
-  map.createPane('state');     map.getPane('state').style.zIndex = 500;
+  // Panes: higher zIndex draws on top
+  map.createPane('basemap');   map.getPane('basemap').style.zIndex   = 300;
+  map.createPane('qpe');       map.getPane('qpe').style.zIndex       = 350; // ABOVE basemap so it's visible
+  map.createPane('counties');  map.getPane('counties').style.zIndex  = 500;
+  map.createPane('trails');    map.getPane('trails').style.zIndex    = 520;
+  map.createPane('state');     map.getPane('state').style.zIndex     = 550;
 
   const base = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     pane:'basemap',
@@ -78,22 +88,30 @@
   const AL_BOUNDS = [[30.137, -88.473], [35.008, -84.889]];
   map.fitBounds(AL_BOUNDS);
 
-  // NOAA RFC QPE (ArcGIS REST). Layer 56 = "Last 7 Days Observed (Image)".
-  const rfcQpe = L.esri.dynamicMapLayer({
-    url: 'https://mapservices.weather.noaa.gov/raster/rest/services/obs/rfc_qpe/MapServer',
-    layers: [56],
-    opacity: 0.45,           // <-- lighter so details below show through better
-    f: 'image',
-    pane: 'qpe'
-  }).addTo(map);
+  // NOAA 7‑day rain (now above basemap, a bit lighter)
+  let rfcQpe;
+  try {
+    rfcQpe = L.esri.dynamicMapLayer({
+      url: 'https://mapservices.weather.noaa.gov/raster/rest/services/obs/rfc_qpe/MapServer',
+      layers: [56],
+      opacity: 0.45,
+      f: 'image',
+      pane: 'qpe'
+    }).addTo(map);
+  } catch (e) {
+    showErr('Rain layer failed to initialize.');
+  }
 
-  // UI toggles
+  // UI toggle
   const rainToggle = document.getElementById('rainToggle');
-  rainToggle.addEventListener('change', () => rainToggle.checked ? rfcQpe.addTo(map) : map.removeLayer(rfcQpe));
+  rainToggle.addEventListener('change', () => {
+    if (!rfcQpe) return;
+    rainToggle.checked ? rfcQpe.addTo(map) : map.removeLayer(rfcQpe);
+  });
 
-  // Trails layer placeholder
+  // Trails layer
   const trailsLayer = L.geoJSON(null, {
-    pane: 'counties', // draw trails above basemap, below the bold state outline
+    pane: 'trails',
     style: { color:'#0066cc', weight:3 },
     onEachFeature: (f, layer)=>{
       layer.on('click', ()=>{
@@ -131,14 +149,14 @@
     trailsToggle.checked ? trailsLayer.addTo(map) : map.removeLayer(trailsLayer);
   });
 
-  // ===== Boundaries (Counties + State outline) with automatic fallback =====
+  // Boundaries (with fallback)
   const countyHover = document.getElementById('countyHover');
   const backBtn = document.getElementById('backBtn');
   let countiesLayer = null, stateLayer = null, currentCounty = null;
 
-  function styleCounty(){ return { color:'#333', weight:1.5, fillOpacity:0, opacity:0.9 }; } // outline only
+  function styleCounty(){ return { color:'#333', weight:1.5, fillOpacity:0, opacity:0.9 }; }
   function styleCountyHover(){ return { weight:2.5, color:'#111' }; }
-  function styleState(){ return { color:'#000', weight:2.5, fillOpacity:0, opacity:1 }; }       // bold state outline
+  function styleState(){ return { color:'#000', weight:2.5, fillOpacity:0, opacity:1 }; }
 
   function highlightCounty(e){
     const layer = e.target;
@@ -169,9 +187,9 @@
   }
 
   async function loadBoundaries(){
-    // 1) Try Alabama GIS service for counties
+    // Primary: Alabama GIS
     const AL_COUNTIES = 'https://maps.alabama.gov/ALGOGIS/rest/services/Counties/MapServer/0/query?where=1%3D1&outFields=*&returnGeometry=true&f=geojson';
-    // 2) Fallback: U.S. Census TIGERweb for counties (STATE='01'), and state outline
+    // Fallbacks: TIGERweb
     const TIGER_COUNTIES = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/1/query?where=STATE%3D%2701%27&outFields=NAME,STATE,COUNTY,NAMELSAD&returnGeometry=true&f=geojson";
     const TIGER_STATE    = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/0/query?where=STATE%3D%2701%27&outFields=NAME,STATE&returnGeometry=true&f=geojson";
 
@@ -179,26 +197,24 @@
     try {
       countiesData = await tryFetch(AL_COUNTIES);
     } catch (e) {
-      // fall back to TIGERweb
       try {
         countiesData = await tryFetch(TIGER_COUNTIES);
       } catch (e2) {
         showMsg('Could not load county boundaries. You can still use the statewide view.');
-        console.error('County load failed (both sources):', e, e2);
+        showErr('County load failed (both sources).');
       }
     }
 
     if (countiesData){
       countiesLayer = L.geoJSON(countiesData, { pane:'counties', style: styleCounty, onEachFeature }).addTo(map);
-      hideMsg();
+      hideMsg(); hideErr();
     }
 
-    // Load state outline from TIGERweb (reliable + small)
     try {
       const stateData = await tryFetch(TIGER_STATE);
       stateLayer = L.geoJSON(stateData, { pane:'state', style: styleState }).addTo(map);
     } catch (e) {
-      console.warn('State outline failed to load:', e);
+      showErr('State outline failed to load.');
     }
   }
 
@@ -211,7 +227,7 @@
 
   loadBoundaries();
 
-  // Overpass trails loader
+  // Trails loader
   async function loadTrailsForBounds(bounds){
     trailsLayer.clearLayers();
     showMsg('Loading trails…');
@@ -234,11 +250,10 @@
       trailsLayer.addData(features);
     } catch(err){
       showMsg('Could not load trails right now. Please try again.');
-      console.error('Overpass/OSM error', err);
+      showErr('Overpass request failed.');
     }
   }
 })();
 </script>
-
 </body>
 </html>
