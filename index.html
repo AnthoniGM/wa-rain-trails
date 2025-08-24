@@ -9,28 +9,41 @@
   html,body{margin:0;height:100%}
   #app{height:100vh;position:relative;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
   #map{height:100%}
-  .toolbar{position:absolute;top:10px;left:10px;z-index:1200;background:#fff;border-radius:12px;padding:8px 10px;box-shadow:0 2px 10px rgba(0,0,0,.2);display:flex;gap:8px;align-items:center;font-size:14px}
+  .toolbar{position:absolute;top:10px;left:10px;z-index:1200;background:#fff;border-radius:12px;padding:8px 10px;box-shadow:0 2px 10px rgba(0,0,0,.2);display:flex;gap:10px;align-items:center;font-size:14px}
   .btn{cursor:pointer;border:none;border-radius:10px;padding:6px 10px;background:#f2f2f2}
   .btn:hover{background:#e8e8e8}
-  .legend{position:absolute;bottom:10px;left:10px;z-index:1100;background:#fff;border-radius:12px;padding:8px 10px;box-shadow:0 2px 10px rgba(0,0,0,.2);font-size:12px;max-width:280px;line-height:1.35}
+  .legend{position:absolute;bottom:10px;left:10px;z-index:1100;background:#fff;border-radius:12px;padding:8px 10px;box-shadow:0 2px 10px rgba(0,0,0,.2);font-size:12px;max-width:300px;line-height:1.35}
   .county-hover{position:absolute;top:10px;right:10px;z-index:1100;background:#212121;color:#fff;padding:6px 10px;border-radius:10px;opacity:.9;display:none}
   .msg{position:absolute;top:60px;left:10px;z-index:1100;background:#fff;border-left:4px solid #1976d2;padding:8px 10px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.15);font-size:13px;display:none}
+  .slider-wrap{display:flex;align-items:center;gap:6px}
+  .slider{width:150px}
+  code.copyable{user-select:all}
 </style>
 </head>
 <body>
 <div id="app">
   <div class="toolbar">
     <button id="backBtn" class="btn" style="display:none">← Back</button>
-    <label><input id="rainToggle" type="checkbox" checked> Rain (7‑day)</label>
+
+    <label><input id="rainToggle" type="checkbox" checked> Rain</label>
+
+    <div class="slider-wrap" title="Rain opacity">
+      <span>Opacity</span>
+      <input id="opacitySlider" class="slider" type="range" min="0" max="0.8" step="0.05" value="0.45" />
+      <span id="opacityVal">0.45</span>
+    </div>
+
     <label><input id="trailsToggle" type="checkbox" checked> Trails</label>
   </div>
+
   <div class="msg" id="msgBox"></div>
   <div class="county-hover" id="countyHover"></div>
   <div id="map"></div>
+
   <div class="legend">
     <div><strong>Alabama Rain (Last 7 Days) + Trails</strong></div>
     <div>• Hover a county to highlight it. Click to drill in (county + neighbors).</div>
-    <div>• Trails load only in the detail view.</div>
+    <div>• Trails (in detail view): hover to see name, click to copy trailhead coords.</div>
     <div style="margin-top:6px;font-size:11px">Rain: NOAA RFC QPE. Boundaries: local TopoJSON. Trails: OpenStreetMap.</div>
   </div>
 </div>
@@ -88,9 +101,7 @@
   const neighbors = new Map(); for (let i=0;i<feats.length;i++) neighbors.set(i,new Set());
   for (let i=0;i<feats.length;i++){
     for (let j=i+1;j<feats.length;j++){
-      if (feats[i]._bbox.intersects(feats[j]._bbox)) {
-        neighbors.get(i).add(j); neighbors.get(j).add(i);
-      }
+      if (feats[i]._bbox.intersects(feats[j]._bbox)) { neighbors.get(i).add(j); neighbors.get(j).add(i); }
     }
   }
 
@@ -125,7 +136,6 @@
     const addHole = (geom) => {
       if (geom.type === 'Polygon') holes.push(geom.coordinates[0].map(([x,y])=>[y,x]));
       if (geom.type === 'MultiPolygon') geom.coordinates.forEach(r=>holes.push(r[0].map(([x,y])=>[y,x])));
-      if (geom.type === 'MultiLineString' || geom.type === 'LineString') return; // ignore
     };
     if (allowedGeoJSON.type === 'FeatureCollection') allowedGeoJSON.features.forEach(f=>addHole(f.geometry));
     else if (allowedGeoJSON.type === 'Feature') addHole(allowedGeoJSON.geometry);
@@ -140,23 +150,65 @@
   let rain = L.esri.dynamicMapLayer({
     url: 'https://mapservices.weather.noaa.gov/raster/rest/services/obs/rfc_qpe/MapServer',
     layers: [56],          // "Last 7 Days Observed" image layer
-    opacity: 0.45,
+    opacity: 0.45,         // default; slider can change it 0..0.8
     f: 'image',
     pane: 'rain'
   }).addTo(map);
 
+  // Rain toggle
   document.getElementById('rainToggle').addEventListener('change', e=>{
     if (!rain) return;
     e.target.checked ? rain.addTo(map) : map.removeLayer(rain);
   });
 
-  // --- Trails (red) — only used in county view ---
-  const trailsLayer = L.geoJSON(null, { pane:'trails', style:{ color:'#d32f2f', weight:3.5 } }).addTo(map);
+  // Rain opacity slider
+  const slider = document.getElementById('opacitySlider');
+  const opVal  = document.getElementById('opacityVal');
+  function setOpacity(v){ if(rain && typeof rain.setOpacity==='function'){ rain.setOpacity(v); opVal.textContent = (+v).toFixed(2); } }
+  slider.addEventListener('input', (e)=> setOpacity(e.target.value));
+  setOpacity(slider.value);
+
+  // --- Trails (RED) — used in county+neighbors view ---
+  const trailsLayer = L.geoJSON(null, {
+    pane:'trails',
+    style:{ color:'#d32f2f', weight:3.5 },
+    onEachFeature: (f, layer) => {
+      const name = (f.properties && f.properties.name) ? f.properties.name : 'Trail';
+      // Hover name (sticky tooltip)
+      layer.bindTooltip(name, {sticky:true, direction:'top', opacity:0.9});
+      // Click popup with copyable coords
+      layer.on('click', ()=>{
+        // Approximate trailhead = first coord
+        let latlng=null;
+        try{
+          if (f.geometry && f.geometry.type==='LineString' && f.geometry.coordinates.length){
+            const c=f.geometry.coordinates[0]; latlng={lng:c[0],lat:c[1]};
+          } else if (f.geometry && f.geometry.type==='MultiLineString' && f.geometry.coordinates[0] && f.geometry.coordinates[0].length){
+            const c=f.geometry.coordinates[0][0]; latlng={lng:c[0],lat:c[1]};
+          }
+        }catch(_){}
+        const div=document.createElement('div');
+        div.innerHTML = `
+          <div><strong>${name}</strong></div>
+          <div>${latlng ? `Trailhead (approx): <code class="copyable">${latlng.lat.toFixed(6)}, ${latlng.lng.toFixed(6)}</code>` : 'Coordinates unavailable'}</div>
+          <button id="copyBtn" class="btn" style="margin-top:6px;">Copy coordinates</button>`;
+        const center = layer.getBounds ? layer.getBounds().getCenter() : (latlng ? latlng : map.getCenter());
+        L.popup().setLatLng(center).setContent(div).openOn(map);
+        div.querySelector('#copyBtn').addEventListener('click', ()=>{
+          const text = latlng ? `${latlng.lat}, ${latlng.lng}` : `${center.lat}, ${center.lng}`;
+          navigator.clipboard.writeText(text);
+          div.querySelector('#copyBtn').textContent='Copied!';
+          setTimeout(()=>div.querySelector('#copyBtn').textContent='Copy coordinates', 1200);
+        });
+      });
+    }
+  }).addTo(map);
+
   document.getElementById('trailsToggle').addEventListener('change', e=>{
     e.target.checked ? trailsLayer.addTo(map) : map.removeLayer(trailsLayer);
   });
 
-  // Enter county view: mask to county + neighbors, zoom, then fetch trails for that bbox
+  // Enter county view: mask to county + neighbors, zoom, then fetch trails for the COMBINED bbox
   async function enterCountyView(countyFeature){
     showMsg('Loading county + neighbors…');
 
@@ -167,15 +219,19 @@
     setMask(fc); // mask to county + adjacent counties
     backBtn.style.display = 'inline-block';
 
-    // Zoom to selected county (with padding)
-    const bounds = L.geoJSON(countyFeature).getBounds();
-    map.fitBounds(bounds.pad(0.15));
+    // Zoom to combined bounds (selected + neighbors)
+    let combined = null;
+    keep.forEach(f=>{
+      const b=L.geoJSON(f).getBounds();
+      combined = combined ? combined.extend(b) : b;
+    });
+    map.fitBounds(combined.pad(0.10));
 
-    // Trails: fetch only within that county bbox
+    // Trails: fetch within combined bbox
     trailsLayer.clearLayers();
     showMsg('Loading trails…');
     try{
-      const b = bounds;
+      const b = combined;
       const bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()].join(',');
       const q = `
         [out:json][timeout:25];
@@ -186,13 +242,14 @@
       const res = await fetch('https://overpass-api.de/api/interpreter', {method:'POST', headers:{'Content-Type':'text/plain'}, body:q});
       const data = await res.json();
 
-      // Convert Overpass ways/relations with geometry to simple GeoJSON lines
+      // Convert Overpass features to simple LineString GeoJSON
       const features = [];
       if (data.elements) {
         for (const el of data.elements) {
           if ((el.type==='way' || el.type==='relation') && el.geometry) {
             const coords = el.geometry.map(p=>[p.lon, p.lat]);
-            features.push({ type:'Feature', properties:{ name: el.tags && el.tags.name }, geometry:{ type:'LineString', coordinates: coords }});
+            const nm = el.tags && el.tags.name;
+            features.push({ type:'Feature', properties:{ name: nm || 'Trail' }, geometry:{ type:'LineString', coordinates: coords }});
           }
         }
       }
@@ -206,7 +263,9 @@
 
   backBtn.addEventListener('click', ()=>{
     trailsLayer.clearLayers();
-    setMask({type:'Feature', geometry: mesh}); // back to whole Alabama
+    // Back to whole Alabama
+    const mesh = topojson.mesh(topo, topo.objects[topoObjName], (a,b)=>a!==b);
+    setMask({type:'Feature', geometry: mesh});
     map.fitBounds(AL_BOUNDS);
     backBtn.style.display = 'none';
   });
