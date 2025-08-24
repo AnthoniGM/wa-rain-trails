@@ -1,61 +1,3 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Alabama Rain + Trails</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
-<style>
-  html, body { margin:0; height:100%; }
-  #app { width:100%; height:100vh; position:relative; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-  #map { width:100%; height:100%; }
-  .toolbar {
-    position:absolute; top:10px; left:10px; z-index:1200;
-    background:#fff; border-radius:12px; padding:8px 10px; box-shadow:0 2px 10px rgba(0,0,0,.2);
-    display:flex; gap:8px; align-items:center; font-size:14px;
-  }
-  .btn { cursor:pointer; border:none; border-radius:10px; padding:6px 10px; background:#f2f2f2; }
-  .btn:hover { background:#e8e8e8; }
-  .legend {
-    position:absolute; bottom:10px; left:10px; z-index:1100;
-    background:#fff; border-radius:12px; padding:8px 10px; box-shadow:0 2px 10px rgba(0,0,0,.2); font-size:12px;
-    max-width: 280px; line-height:1.35;
-  }
-  .county-hover { position:absolute; top:10px; right:10px; z-index:1100; 
-    background:#212121; color:#fff; padding:6px 10px; border-radius:10px; opacity:0.9; display:none;}
-  .back { display:none; }
-  .leaflet-popup-content button.copy-btn { margin-top:6px; }
-  .msg {
-    position:absolute; top:60px; left:10px; z-index:1100; background:#fff; border-left:4px solid #1976d2;
-    padding:8px 10px; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,.15); font-size:13px; display:none;
-  }
-  .err {
-    position:absolute; top:100px; left:10px; z-index:1100; background:#fff; border-left:4px solid #d32f2f;
-    padding:8px 10px; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,.15); font-size:13px; display:none;
-  }
-</style>
-</head>
-<body>
-<div id="app">
-  <div class="toolbar">
-    <button id="backBtn" class="btn back" title="Back to Alabama">← Back</button>
-    <label><input id="rainToggle" type="checkbox" checked/> Rain (7‑day)</label>
-    <label><input id="trailsToggle" type="checkbox" checked/> Trails</label>
-  </div>
-  <div class="msg" id="msgBox"></div>
-  <div class="err" id="errBox"></div>
-  <div class="county-hover" id="countyHover"></div>
-  <div id="map"></div>
-  <div class="legend">
-    <div><strong>Alabama Rain (Last 7 Days) + Trails</strong></div>
-    <div>• Hover a county to see its name. Click to drill in.</div>
-    <div>• Click a trail to copy trailhead coordinates.</div>
-    <div style="margin-top:6px; font-size:11px;">
-      Rain: NOAA/NWS RFC Observed QPE. Trails: OpenStreetMap via Overpass.
-    </div>
-  </div>
-</div>
-
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script src="https://cdn.jsdelivr.net/npm/esri-leaflet@3.0.11/dist/esri-leaflet.js" crossorigin=""></script>
 <script src="https://cdn.jsdelivr.net/npm/osmtogeojson@3.0.0/osmtogeojson.js" crossorigin=""></script>
@@ -72,7 +14,7 @@
   const map = L.map('map', { zoomControl: true, preferCanvas: true });
   map.zoomControl.setPosition('topright');
 
-  // Panes
+  // Panes (z-order)
   map.createPane('basemap');   map.getPane('basemap').style.zIndex   = 300;
   map.createPane('qpe');       map.getPane('qpe').style.zIndex       = 350;
   map.createPane('counties');  map.getPane('counties').style.zIndex  = 500;
@@ -88,7 +30,7 @@
   const AL_BOUNDS = [[30.137, -88.473], [35.008, -84.889]];
   map.fitBounds(AL_BOUNDS);
 
-  // NOAA 7‑day rain
+  // NOAA 7‑day rain (above basemap)
   let rfcQpe;
   try {
     rfcQpe = L.esri.dynamicMapLayer({
@@ -102,7 +44,6 @@
     showErr('Rain layer failed to initialize.');
   }
 
-  // UI toggles
   const rainToggle = document.getElementById('rainToggle');
   rainToggle.addEventListener('change', () => {
     if (!rfcQpe) return;
@@ -149,77 +90,89 @@
     trailsToggle.checked ? trailsLayer.addTo(map) : map.removeLayer(trailsLayer);
   });
 
-  // Boundaries (with fallback)
+  // ===== Boundaries via Esri‑Leaflet FeatureLayer =====
   const countyHover = document.getElementById('countyHover');
   const backBtn = document.getElementById('backBtn');
   let countiesLayer = null, stateLayer = null, currentCounty = null;
 
-  function styleCounty(){ return { color:'#333', weight:1.5, fillOpacity:0, opacity:0.9 }; }
-  function styleCountyHover(){ return { weight:2.5, color:'#111' }; }
-  function styleState(){ return { color:'#000', weight:2.5, fillOpacity:0, opacity:1 }; }
+  const styleCounty      = () => ({ color:'#333', weight:1.5, fillOpacity:0, opacity:0.9 });
+  const styleCountyHover = () => ({ color:'#111', weight:2.5, fillOpacity:0, opacity:1 });
+  const styleState       = () => ({ color:'#000', weight:2.5, fillOpacity:0, opacity:1 });
 
   function highlightCounty(e){
-    const layer = e.target;
-    layer.setStyle(styleCountyHover());
-    const n = (layer.feature.properties.NAME || layer.feature.properties.NAME10 || layer.feature.properties.NAME20 || layer.feature.properties.NAMELSAD || '').toString();
+    e.layer.setStyle(styleCountyHover());
+    const f = e.layer.feature;
+    const props = f && f.properties || {};
+    const n = (props.NAME || props.NAMELSAD || props.NAME10 || props.NAME20 || '').toString();
     if (n) { countyHover.textContent = n + ' County'; countyHover.style.display='block'; }
   }
   function resetHighlight(e){
-    countiesLayer.resetStyle(e.target);
+    countiesLayer.resetStyle(e.layer);
     countyHover.style.display='none';
   }
   function zoomCounty(e){
-    hideMsg();
-    const layer = e.target;
+    const layer = e.layer;
     currentCounty = layer;
     map.fitBounds(layer.getBounds(), { padding:[20,20] });
     backBtn.style.display = 'inline-block';
     loadTrailsForBounds(layer.getBounds());
   }
-  function onEachCounty(feature, layer){
-    layer.on({ mouseover: highlightCounty, mouseout: resetHighlight, click: zoomCounty });
+
+  // Primary: Alabama GIS MapServer/0 (counties are already in WGS84)
+  const AL_COUNTIES_URL = 'https://maps.alabama.gov/ALGOGIS/rest/services/Counties/MapServer/0';
+
+  // Fallback: TIGERweb "States and Counties" — Counties layer id 55 (Census 2020 set)
+  const TIGER_COUNTIES_URL = 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/55';
+  // Fallback for state outline: TIGERweb States layer id 54
+  const TIGER_STATE_URL    = 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/54';
+
+  function attachCountyEvents(layer){
+    layer.on('mouseover', highlightCounty);
+    layer.on('mouseout', resetHighlight);
+    layer.on('click', zoomCounty);
   }
 
-  async function tryFetch(url){
-    const r = await fetch(url, {mode:'cors'});
-    if (!r.ok) throw new Error('HTTP '+r.status);
-    return r.json();
+  function loadCounties(){
+    // Try Alabama GIS first
+    countiesLayer = L.esri.featureLayer({
+      url: AL_COUNTIES_URL,
+      pane: 'counties',
+      where: '1=1',
+      style: styleCounty,
+      precision: 6
+    })
+    .on('load', function(e){
+      // Loaded successfully
+    })
+    .on('createfeature', function(e){
+      attachCountyEvents(e.layer);
+    })
+    .on('requesterror', function(){
+      // Switch to TIGERweb fallback
+      if (countiesLayer) { map.removeLayer(countiesLayer); }
+      countiesLayer = L.esri.featureLayer({
+        url: TIGER_COUNTIES_URL,
+        pane: 'counties',
+        where: "STATE='01'",
+        style: styleCounty,
+        precision: 6
+      })
+      .on('createfeature', function(e){ attachCountyEvents(e.layer); })
+      .addTo(map);
+    })
+    .addTo(map);
   }
 
-  async function loadBoundaries(){
-    // Primary: Alabama GIS (now with outSR=4326)
-    const AL_COUNTIES = 'https://maps.alabama.gov/ALGOGIS/rest/services/Counties/MapServer/0/query?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&f=geojson';
-    // Fallbacks: TIGERweb (also force outSR=4326)
-    const TIGER_COUNTIES = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/1/query?where=STATE%3D%2701%27&outFields=NAME,STATE,COUNTY,NAMELSAD&returnGeometry=true&outSR=4326&f=geojson";
-    const TIGER_STATE    = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/0/query?where=STATE%3D%2701%27&outFields=NAME,STATE&returnGeometry=true&outSR=4326&f=geojson";
-
-    let countiesData = null;
-    try {
-      countiesData = await tryFetch(AL_COUNTIES);
-    } catch (e) {
-      try {
-        countiesData = await tryFetch(TIGER_COUNTIES);
-      } catch (e2) {
-        showMsg('Could not load county boundaries. You can still use the statewide view.');
-        showErr('County load failed (both sources).');
-      }
-    }
-
-    if (countiesData && countiesData.features) {
-      countiesLayer = L.geoJSON(countiesData, { pane:'counties', style: styleCounty, onEachFeature }).addTo(map);
-      showMsg('Loaded ' + countiesData.features.length + ' counties');
-      setTimeout(hideMsg, 1500);
-      hideErr();
-    }
-
-    try {
-      const stateData = await tryFetch(TIGER_STATE);
-      if (stateData) {
-        stateLayer = L.geoJSON(stateData, { pane:'state', style: styleState }).addTo(map);
-      }
-    } catch (e) {
-      showErr('State outline failed to load.');
-    }
+  function loadStateOutline(){
+    // Use TIGERweb States outline (works widely)
+    stateLayer = L.esri.featureLayer({
+      url: TIGER_STATE_URL,
+      pane: 'state',
+      where: "STATE='01'",
+      style: styleState,
+      precision: 6,
+      simplifyFactor: 0.5
+    }).addTo(map);
   }
 
   backBtn.addEventListener('click', ()=>{
@@ -229,9 +182,10 @@
     trailsLayer.clearLayers();
   });
 
-  loadBoundaries();
+  loadCounties();
+  loadStateOutline();
 
-  // Trails loader
+  // Trails loader (Overpass)
   async function loadTrailsForBounds(bounds){
     trailsLayer.clearLayers();
     showMsg('Loading trails…');
@@ -259,5 +213,3 @@
   }
 })();
 </script>
-</body>
-</html>
