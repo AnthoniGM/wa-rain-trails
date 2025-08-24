@@ -219,13 +219,18 @@
     setMask(fc); // mask to county + adjacent counties
     backBtn.style.display = 'inline-block';
 
-    // Zoom to combined bounds (selected + neighbors)
+    // Zoom to combined bounds (selected + neighbors) — fill the screen
     let combined = null;
     keep.forEach(f=>{
-      const b=L.geoJSON(f).getBounds();
+      const b = L.geoJSON(f).getBounds();
       combined = combined ? combined.extend(b) : b;
     });
-    map.fitBounds(combined.pad(0.10));
+    
+    // minimal padding overall; a little extra at the top so the toolbar doesn’t overlap
+    map.fitBounds(combined, {
+      paddingTopLeft: [8, 70],   // leave room for the toolbar
+      paddingBottomRight: [8, 8]
+    });
 
     // Trails: fetch within combined bbox
     trailsLayer.clearLayers();
