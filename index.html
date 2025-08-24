@@ -3,18 +3,19 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Alabama Rain + Trails (Fast)</title>
+<title>Alabama Rain + Trails</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" crossorigin>
 <style>
   html,body{margin:0;height:100%}
-  #app{height:100vh;position:relative;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+  /* Let the iframe decide height; we fill 100% of it */
+  #app{height:100%;position:relative;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
   #map{height:100%}
-  .toolbar{position:absolute;top:10px;left:10px;z-index:1200;background:#fff;border-radius:12px;padding:8px 10px;box-shadow:0 2px 10px rgba(0,0,0,.2);display:flex;gap:10px;align-items:center;font-size:14px}
+  .toolbar{position:absolute;top:10px;left:10px;z-index:1200;background:#fff;border-radius:12px;padding:8px 10px;box-shadow:0 2px 10px rgba(0,0,0,.12);display:flex;gap:10px;align-items:center;font-size:14px}
   .btn{cursor:pointer;border:none;border-radius:10px;padding:6px 10px;background:#f2f2f2}
   .btn:hover{background:#e8e8e8}
-  .legend{position:absolute;bottom:10px;left:10px;z-index:1100;background:#fff;border-radius:12px;padding:8px 10px;box-shadow:0 2px 10px rgba(0,0,0,.2);font-size:12px;max-width:300px;line-height:1.35}
-  .county-hover{position:absolute;top:10px;right:10px;z-index:1100;background:#212121;color:#fff;padding:6px 10px;border-radius:10px;opacity:.9;display:none}
-  .msg{position:absolute;top:60px;left:10px;z-index:1100;background:#fff;border-left:4px solid #1976d2;padding:8px 10px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.15);font-size:13px;display:none}
+  .legend{position:absolute;bottom:10px;left:10px;z-index:1100;background:#fff;border-radius:12px;padding:8px 10px;box-shadow:0 2px 10px rgba(0,0,0,.12);font-size:12px;max-width:300px;line-height:1.35}
+  .county-hover{position:absolute;top:10px;right:10px;z-index:1100;background:#212121;color:#fff;padding:6px 10px;border-radius:10px;opacity:.95;display:none}
+  .msg{position:absolute;top:60px;left:10px;z-index:1100;background:#fff;border-left:4px solid #1976d2;padding:8px 10px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.12);font-size:13px;display:none}
   .slider-wrap{display:flex;align-items:center;gap:6px}
   .slider{width:150px}
   code.copyable{user-select:all}
@@ -43,7 +44,7 @@
   <div class="legend">
     <div><strong>Alabama Rain (Last 7 Days) + Trails</strong></div>
     <div>• Hover a county to highlight it. Click to drill in (county + neighbors).</div>
-    <div>• Trails (in detail view): hover to see name, click to copy trailhead coords.</div>
+    <div>• Trails: hover for name, click to copy coords.</div>
     <div style="margin-top:6px;font-size:11px">Rain: NOAA RFC QPE. Boundaries: local TopoJSON. Trails: OpenStreetMap.</div>
   </div>
 </div>
@@ -55,6 +56,12 @@
 
 <script>
 (async function(){
+  // --- URL param defaults ---
+  const params = new URLSearchParams(location.search);
+  const DEFAULT_OPACITY = Math.max(0, Math.min(0.8, parseFloat(params.get('opacity') || '0.45')));
+  const DEFAULT_RAIN   = params.get('rain')   !== '0'; // default on
+  const DEFAULT_TRAILS = params.get('trails') !== '0'; // default on
+
   // UI helpers
   const msg = document.getElementById('msgBox');
   const showMsg = (t)=>{ msg.textContent=t; msg.style.display='block'; };
@@ -62,21 +69,41 @@
   const countyHoverEl = document.getElementById('countyHover');
   const backBtn = document.getElementById('backBtn');
 
+  // Apply defaults to toggles/slider before layers are created
+  const rainToggleEl   = document.getElementById('rainToggle');
+  const trailsToggleEl = document.getElementById('trailsToggle');
+  const sliderEl       = document.getElementById('opacitySlider');
+  const opValEl        = document.getElementById('opacityVal');
+  rainToggleEl.checked   = DEFAULT_RAIN;
+  trailsToggleEl.checked = DEFAULT_TRAILS;
+  sliderEl.value         = DEFAULT_OPACITY.toString();
+  opValEl.textContent    = DEFAULT_OPACITY.toFixed(2);
+
+  // Bounds for Alabama (fit + max bounds)
+  const AL_BOUNDS = L.latLngBounds([30.137,-88.473],[35.008,-84.889]);
+
   // Map & panes
-  const map = L.map('map', { zoomControl:true, preferCanvas:true });
+  const map = L.map('map', {
+    zoomControl:true,
+    preferCanvas:true,
+    maxBounds: AL_BOUNDS.pad(0.05),
+    maxBoundsViscosity: 1.0,
+    worldCopyJump:false
+  });
   map.zoomControl.setPosition('topright');
 
   map.createPane('base');     map.getPane('base').style.zIndex = 300;
   map.createPane('rain');     map.getPane('rain').style.zIndex = 350;
-  map.createPane('mask');     map.getPane('mask').style.zIndex = 400; // darken outside
+  map.createPane('mask');     map.getPane('mask').style.zIndex = 400; // hides outside
   map.createPane('counties'); map.getPane('counties').style.zIndex = 500;
   map.createPane('trails');   map.getPane('trails').style.zIndex = 520;
 
   // Basemap
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{pane:'base', attribution:'© OpenStreetMap'}).addTo(map);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+    pane:'base', attribution:'© OpenStreetMap', noWrap:true
+  }).addTo(map);
 
-  // Fit to Alabama (loose bounds)
-  const AL_BOUNDS = [[30.137,-88.473],[35.008,-84.889]];
+  // Start view
   map.fitBounds(AL_BOUNDS);
 
   // --- Load local TopoJSON (Alabama counties) ---
@@ -86,7 +113,6 @@
     if (!r.ok) throw new Error('local 404');
     topo = await r.json();
   } catch {
-    // fallback if the local file isn't present yet
     const r2 = await fetch('https://raw.githubusercontent.com/jethin/us-counties-tracts-topojson/main/counties/01.topo.json');
     topo = await r2.json();
   }
@@ -95,7 +121,7 @@
   const topoObjName = Object.keys(topo.objects)[0];
   const countiesFC = topojson.feature(topo, topo.objects[topoObjName]);
 
-  // Build a fast neighbor map (bbox-based)
+  // Neighbor map (bbox-based)
   const feats = countiesFC.features;
   feats.forEach((f,i)=>{ f._idx=i; f._bbox = L.geoJSON(f).getBounds(); });
   const neighbors = new Map(); for (let i=0;i<feats.length;i++) neighbors.set(i,new Set());
@@ -105,11 +131,11 @@
     }
   }
 
-  // Create a state outline mesh to use for the initial mask
+  // State outline (for reference) from mesh of counties
   const mesh = topojson.mesh(topo, topo.objects[topoObjName], (a,b)=>a!==b);
   L.geoJSON({type:'Feature', geometry: mesh}, {pane:'counties', style:{color:'#000', weight:2, fillOpacity:0}}).addTo(map);
 
-  // County layer (hover highlight + click to drill)
+  // County layer (hover + click)
   const countiesLayer = L.geoJSON(countiesFC, {
     pane:'counties',
     style: { color:'#444', weight:1.2, fillOpacity:0 },
@@ -127,8 +153,9 @@
     }
   }).addTo(map);
 
-  // Visual mask: show only inside provided polygon(s)
+  // Visual mask: fully hide everything outside the polygon(s)
   let maskLayer = null;
+  const MASK_OPACITY = 1.0; // 1 = fully opaque (hide outside)
   function setMask(allowedGeoJSON){
     if (maskLayer) { map.removeLayer(maskLayer); maskLayer = null; }
     const world = [[-90,-180],[-90,180],[90,180],[90,-180]];
@@ -140,7 +167,9 @@
     if (allowedGeoJSON.type === 'FeatureCollection') allowedGeoJSON.features.forEach(f=>addHole(f.geometry));
     else if (allowedGeoJSON.type === 'Feature') addHole(allowedGeoJSON.geometry);
     else addHole(allowedGeoJSON);
-    maskLayer = L.polygon([world, ...holes], { pane:'mask', stroke:false, fill:true, fillColor:'#000', fillOpacity:0.35, interactive:false }).addTo(map);
+    maskLayer = L.polygon([world, ...holes], {
+      pane:'mask', stroke:false, fill:true, fillColor:'#fff', fillOpacity: MASK_OPACITY, interactive:false
+    }).addTo(map);
   }
 
   // Initial mask = entire Alabama (from mesh)
@@ -149,24 +178,21 @@
   // --- Rain raster (NOAA RFC QPE, last 7 days) ---
   let rain = L.esri.dynamicMapLayer({
     url: 'https://mapservices.weather.noaa.gov/raster/rest/services/obs/rfc_qpe/MapServer',
-    layers: [56],          // "Last 7 Days Observed" image layer
-    opacity: 0.45,         // default; slider can change it 0..0.8
+    layers: [56],                // "Last 7 Days Observed" image layer
+    opacity: DEFAULT_OPACITY,    // from URL or default
     f: 'image',
     pane: 'rain'
   }).addTo(map);
 
-  // Rain toggle
+  // Rain toggle + opacity slider
+  function setOpacity(v){ if(rain && rain.setOpacity){ rain.setOpacity(v); opValEl.textContent=(+v).toFixed(2);} }
   document.getElementById('rainToggle').addEventListener('change', e=>{
     if (!rain) return;
     e.target.checked ? rain.addTo(map) : map.removeLayer(rain);
   });
-
-  // Rain opacity slider
-  const slider = document.getElementById('opacitySlider');
-  const opVal  = document.getElementById('opacityVal');
-  function setOpacity(v){ if(rain && typeof rain.setOpacity==='function'){ rain.setOpacity(v); opVal.textContent = (+v).toFixed(2); } }
-  slider.addEventListener('input', (e)=> setOpacity(e.target.value));
-  setOpacity(slider.value);
+  sliderEl.addEventListener('input', (e)=> setOpacity(e.target.value));
+  setOpacity(DEFAULT_OPACITY);
+  if (!DEFAULT_RAIN) map.removeLayer(rain); // honor URL param
 
   // --- Trails (RED) — used in county+neighbors view ---
   const trailsLayer = L.geoJSON(null, {
@@ -174,11 +200,8 @@
     style:{ color:'#d32f2f', weight:3.5 },
     onEachFeature: (f, layer) => {
       const name = (f.properties && f.properties.name) ? f.properties.name : 'Trail';
-      // Hover name (sticky tooltip)
-      layer.bindTooltip(name, {sticky:true, direction:'top', opacity:0.9});
-      // Click popup with copyable coords
+      layer.bindTooltip(name, {sticky:true, direction:'top', opacity:0.95});
       layer.on('click', ()=>{
-        // Approximate trailhead = first coord
         let latlng=null;
         try{
           if (f.geometry && f.geometry.type==='LineString' && f.geometry.coordinates.length){
@@ -203,12 +226,13 @@
       });
     }
   }).addTo(map);
+  if (!DEFAULT_TRAILS) map.removeLayer(trailsLayer);
 
   document.getElementById('trailsToggle').addEventListener('change', e=>{
     e.target.checked ? trailsLayer.addTo(map) : map.removeLayer(trailsLayer);
   });
 
-  // Enter county view: mask to county + neighbors, zoom, then fetch trails for the COMBINED bbox
+  // Enter county view: mask to county + neighbors, zoom (edge-to-edge), then fetch trails for combined bbox
   async function enterCountyView(countyFeature){
     showMsg('Loading county + neighbors…');
 
@@ -216,19 +240,17 @@
     const neighIdx = Array.from(neighbors.get(i) || []);
     const keep = [countyFeature, ...neighIdx.map(j=>feats[j])];
     const fc = { type:'FeatureCollection', features: keep };
-    setMask(fc); // mask to county + adjacent counties
+    setMask(fc); // fully hide outside the combined shape
     backBtn.style.display = 'inline-block';
 
-    // Zoom to combined bounds (selected + neighbors) — fill the screen
+    // Edge-to-edge fit (leave top padding for toolbar)
     let combined = null;
     keep.forEach(f=>{
       const b = L.geoJSON(f).getBounds();
       combined = combined ? combined.extend(b) : b;
     });
-    
-    // minimal padding overall; a little extra at the top so the toolbar doesn’t overlap
     map.fitBounds(combined, {
-      paddingTopLeft: [8, 70],   // leave room for the toolbar
+      paddingTopLeft: [8, 70],
       paddingBottomRight: [8, 8]
     });
 
@@ -247,7 +269,6 @@
       const res = await fetch('https://overpass-api.de/api/interpreter', {method:'POST', headers:{'Content-Type':'text/plain'}, body:q});
       const data = await res.json();
 
-      // Convert Overpass features to simple LineString GeoJSON
       const features = [];
       if (data.elements) {
         for (const el of data.elements) {
@@ -260,6 +281,7 @@
       }
       if (features.length === 0) showMsg('No mapped trails here yet (OSM).'); else hideMsg();
       trailsLayer.addData({type:'FeatureCollection', features});
+      if (!trailsToggleEl.checked) map.removeLayer(trailsLayer); // respect toggle state
     }catch(e){
       showMsg('Trails are busy. Try again.');
       console.error(e);
@@ -268,9 +290,7 @@
 
   backBtn.addEventListener('click', ()=>{
     trailsLayer.clearLayers();
-    // Back to whole Alabama
-    const mesh = topojson.mesh(topo, topo.objects[topoObjName], (a,b)=>a!==b);
-    setMask({type:'Feature', geometry: mesh});
+    setMask({type:'Feature', geometry: mesh}); // back to whole Alabama
     map.fitBounds(AL_BOUNDS);
     backBtn.style.display = 'none';
   });
