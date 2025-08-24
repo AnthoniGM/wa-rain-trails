@@ -1,86 +1,26 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Alabama Rain + Trails — DIAGNOSTIC</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
-<style>
-  html, body { margin:0; height:100%; }
-  #app { width:100%; height:100vh; position:relative; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-  #map { width:100%; height:100%; }
-  .toolbar {
-    position:absolute; top:10px; left:10px; z-index:1200;
-    background:#fff; border-radius:12px; padding:8px 10px; box-shadow:0 2px 10px rgba(0,0,0,.2);
-    display:flex; gap:8px; align-items:center; font-size:14px;
-  }
-  .btn { cursor:pointer; border:none; border-radius:10px; padding:6px 10px; background:#f2f2f2; }
-  .btn:hover { background:#e8e8e8; }
-  .legend {
-    position:absolute; bottom:10px; left:10px; z-index:1100;
-    background:#fff; border-radius:12px; padding:8px 10px; box-shadow:0 2px 10px rgba(0,0,0,.2); font-size:12px;
-    max-width: 280px; line-height:1.35;
-  }
-  .county-hover { position:absolute; top:10px; right:10px; z-index:1100; 
-    background:#212121; color:#fff; padding:6px 10px; border-radius:10px; opacity:0.9; display:none;}
-  .back { display:none; }
-  .leaflet-popup-content button.copy-btn { margin-top:6px; }
-
-  /* Diagnostic UI */
-  .msg { position:absolute; top:60px; left:10px; z-index:1100; background:#fff; border-left:4px solid #1976d2;
-         padding:8px 10px; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,.15); font-size:13px; display:none; }
-  .err { position:absolute; top:100px; left:10px; z-index:1100; background:#fff; border-left:4px solid #d32f2f;
-         padding:8px 10px; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,.15); font-size:13px; display:none; max-width:36rem; white-space:pre-wrap; }
-  .ok  { position:absolute; top:140px; left:10px; z-index:1100; background:#fff; border-left:4px solid #2e7d32;
-         padding:8px 10px; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,.15); font-size:13px; display:none; }
-</style>
-</head>
-<body>
-<div id="app">
-  <div class="toolbar">
-    <button id="backBtn" class="btn back" title="Back to Alabama">← Back</button>
-    <label><input id="rainToggle" type="checkbox" checked/> Rain (7‑day)</label>
-    <label><input id="trailsToggle" type="checkbox" checked/> Trails</label>
-  </div>
-  <div class="msg" id="msgBox"></div>
-  <div class="err" id="errBox"></div>
-  <div class="ok"  id="okBox"></div>
-  <div class="county-hover" id="countyHover"></div>
-  <div id="map"></div>
-  <div class="legend">
-    <div><strong>Alabama Rain (Last 7 Days) + Trails</strong></div>
-    <div>• Hover a county to see its name. Click to drill in.</div>
-    <div>• Click a trail to copy trailhead coordinates.</div>
-    <div style="margin-top:6px; font-size:11px;">
-      Rain: NOAA/NWS RFC Observed QPE. Trails: OpenStreetMap via Overpass.
-    </div>
-  </div>
-</div>
-
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script src="https://cdn.jsdelivr.net/npm/esri-leaflet@3.0.11/dist/esri-leaflet.js" crossorigin=""></script>
 <script src="https://cdn.jsdelivr.net/npm/osmtogeojson@3.0.0/osmtogeojson.js" crossorigin=""></script>
 <script>
 (function(){
-  // ---------- Helpers ----------
+  // ---------- Helpers / UI ----------
   const msg = document.getElementById('msgBox');
   const err = document.getElementById('errBox');
-  const ok  = document.getElementById('okBox');
   const showMsg = (t)=>{ msg.textContent=t; msg.style.display='block'; };
   const hideMsg = ()=>{ msg.style.display='none'; };
   const showErr = (t)=>{ err.textContent=(err.textContent? err.textContent+'\\n':'')+t; err.style.display='block'; console.error(t); };
   const clearErr= ()=>{ err.textContent=''; err.style.display='none'; };
-  const showOk  = (t)=>{ ok.textContent=t; ok.style.display='block'; setTimeout(()=>{ok.style.display='none';}, 2000); };
+  const showOk  = (t)=>{ const ok=document.createElement('div'); ok.style.cssText='position:absolute;top:140px;left:10px;z-index:1100;background:#fff;border-left:4px solid #2e7d32;padding:8px 10px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.15);font-size:13px;'; ok.textContent=t; document.getElementById('app').appendChild(ok); setTimeout(()=>ok.remove(), 1600); };
 
-  // Capture any errors
+  // Catch errors so we see them on-screen
   window.addEventListener('error', e => showErr('JS error: ' + (e.message||e)));
   window.addEventListener('unhandledrejection', e => showErr('Promise rejection: ' + (e.reason && (e.reason.message||e.reason) || e)));
 
-  // ---------- Map base ----------
+  // ---------- Map ----------
   const map = L.map('map', { zoomControl: true, preferCanvas: true });
   map.zoomControl.setPosition('topright');
 
-  // Z‑order
+  // Z-order panes
   map.createPane('basemap');   map.getPane('basemap').style.zIndex   = 300;
   map.createPane('qpe');       map.getPane('qpe').style.zIndex       = 350;
   map.createPane('counties');  map.getPane('counties').style.zIndex  = 500;
@@ -94,7 +34,7 @@
   const AL_BOUNDS = [[30.137, -88.473], [35.008, -84.889]];
   map.fitBounds(AL_BOUNDS);
 
-  // ---------- Rain ----------
+  // Rain (7-day)
   let rfcQpe;
   try {
     rfcQpe = L.esri.dynamicMapLayer({
@@ -103,13 +43,12 @@
     }).addTo(map);
   } catch (e) { showErr('Rain layer init failed: ' + e); }
 
-  const rainToggle = document.getElementById('rainToggle');
-  rainToggle.addEventListener('change', () => {
+  document.getElementById('rainToggle').addEventListener('change', (e) => {
     if (!rfcQpe) return;
-    rainToggle.checked ? rfcQpe.addTo(map) : map.removeLayer(rfcQpe);
+    e.target.checked ? rfcQpe.addTo(map) : map.removeLayer(rfcQpe);
   });
 
-  // ---------- Trails (same as before) ----------
+  // Trails
   const trailsLayer = L.geoJSON(null, {
     pane: 'trails', style: { color:'#0066cc', weight:3 },
     onEachFeature: (f, layer)=>{
@@ -142,82 +81,108 @@
     e.target.checked?trailsLayer.addTo(map):map.removeLayer(trailsLayer);
   });
 
-  // ---------- Boundaries (two strategies) ----------
+  // ---------- Boundaries with localStorage cache ----------
   const countyHover = document.getElementById('countyHover');
   const backBtn = document.getElementById('backBtn');
   let countiesLayer=null, stateLayer=null;
 
-  const styleCounty      = () => ({ color:'#333', weight:1.5, fillOpacity:0, opacity:0.9 });
-  const styleCountyHover = () => ({ color:'#111', weight:2.5, fillOpacity:0, opacity:1 });
-  const styleState       = () => ({ color:'#000', weight:2.5, fillOpacity:0, opacity:1 });
+  const styleCounty      = () => ({ color:'#333', weight:1.4, fillOpacity:0, opacity:0.9 });
+  const styleCountyHover = () => ({ color:'#111', weight:2.2, fillOpacity:0, opacity:1 });
+  const styleState       = () => ({ color:'#000', weight:2.2, fillOpacity:0, opacity:1 });
 
+  function safeOn(layer, evt, fn){
+    if (layer && typeof layer.on==='function') layer.on(evt, fn);
+  }
   function attachCountyEvents(layer){
-    layer.on('mouseover', (e)=>{ e.target.setStyle(styleCountyHover()); const p=e.target.feature&&e.target.feature.properties||{}; const n=(p.NAME||p.NAMELSAD||p.NAME10||p.NAME20||'').toString(); if(n){ countyHover.textContent=n+' County'; countyHover.style.display='block'; }});
-    layer.on('mouseout',  (e)=>{ countiesLayer.resetStyle(e.target); countyHover.style.display='none'; });
-    layer.on('click',     (e)=>{ map.fitBounds(e.target.getBounds(), {padding:[20,20]}); backBtn.style.display='inline-block'; loadTrailsForBounds(e.target.getBounds()); });
+    safeOn(layer, 'mouseover', (e)=>{ const tgt=e.target; if(!tgt) return;
+      tgt.setStyle(styleCountyHover());
+      const p=tgt.feature && tgt.feature.properties || {};
+      const n=(p.NAME||p.NAMELSAD||p.NAME10||p.NAME20||'').toString();
+      if(n){ countyHover.textContent=n+' County'; countyHover.style.display='block'; }
+    });
+    safeOn(layer, 'mouseout', (e)=>{ const tgt=e.target; if(!tgt||!countiesLayer||!countiesLayer.resetStyle) return;
+      countiesLayer.resetStyle(tgt); countyHover.style.display='none';
+    });
+    safeOn(layer, 'click', (e)=>{ const tgt=e.target; if(!tgt) return;
+      map.fitBounds(tgt.getBounds(), {padding:[20,20]}); backBtn.style.display='inline-block';
+      loadTrailsForBounds(tgt.getBounds());
+    });
   }
 
-  // Strategy A: Esri‑Leaflet FeatureLayer
-  function loadBoundariesA(){
-    showMsg('Loading county/state outlines (A)…');
-    clearErr();
-
-    try{
-      countiesLayer = L.esri.featureLayer({
-        url: 'https://maps.alabama.gov/ALGOGIS/rest/services/Counties/MapServer/0',
-        pane: 'counties',
-        where: '1=1',
-        style: styleCounty,
-        precision: 6
-      })
-      .on('createfeature', (e)=> attachCountyEvents(e.layer))
-      .on('requesterror', (e)=> { showErr('Counties A requesterror. Falling back to B.'); loadBoundariesB(); })
-      .on('load', ()=> { hideMsg(); showOk('Counties loaded (A)'); })
-      .addTo(map);
-
-      stateLayer = L.esri.featureLayer({
-        url: 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/54',
-        pane: 'state',
-        where: "STATE='01'",
-        style: styleState,
-        precision: 6
-      })
-      .on('requesterror', ()=> showErr('State A requesterror (still okay if counties show).'))
-      .addTo(map);
-    }catch(e){
-      showErr('FeatureLayer init error: '+e);
-      loadBoundariesB();
-    }
-  }
-
-  // Strategy B: Raw GeoJSON fetch with outSR=4326
-  async function loadBoundariesB(){
-    showMsg('Loading county/state outlines (B)…');
-    try{
-      const countiesUrl = 'https://maps.alabama.gov/ALGOGIS/rest/services/Counties/MapServer/0/query?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&f=geojson';
-      const stateUrl    = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/0/query?where=STATE%3D%2701%27&outFields=NAME,STATE&returnGeometry=true&outSR=4326&f=geojson";
-      const r1 = await fetch(countiesUrl); if(!r1.ok) throw new Error('Counties HTTP '+r1.status);
-      const r2 = await fetch(stateUrl);    if(!r2.ok) throw new Error('State HTTP '+r2.status);
-      const gj1 = await r1.json(); const gj2 = await r2.json();
-      countiesLayer = L.geoJSON(gj1, { pane:'counties', style: styleCounty, onEachFeature: (f,layer)=>attachCountyEvents(layer)}).addTo(map);
-      stateLayer    = L.geoJSON(gj2, { pane:'state',    style: styleState }).addTo(map);
-      hideMsg(); showOk('Counties loaded (B): '+(gj1.features?gj1.features.length:0));
-    }catch(e){
-      showErr('Boundaries B failed: '+e);
-    }
-  }
-
-  // Kick off A (will fallback to B if needed)
-  loadBoundariesA();
-
-  // Back button
   backBtn.addEventListener('click', ()=>{
     map.fitBounds(AL_BOUNDS);
     backBtn.style.display='none';
     trailsLayer.clearLayers();
   });
 
-  // Trails loader
+  const LS_KEYS = {
+    counties: 'al_counties_geojson_v1',
+    state:    'al_state_geojson_v1',
+    meta:     'al_geo_meta_v1'
+  };
+  const TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+  function getCache(){
+    try{
+      const meta = JSON.parse(localStorage.getItem(LS_KEYS.meta)||'{}');
+      if (!meta.ts || (Date.now() - meta.ts) > TTL_MS) return null;
+      const counties = JSON.parse(localStorage.getItem(LS_KEYS.counties)||'null');
+      const state    = JSON.parse(localStorage.getItem(LS_KEYS.state)||'null');
+      if (counties && state) return {counties, state};
+    }catch(e){}
+    return null;
+  }
+  function setCache(counties, state){
+    try{
+      localStorage.setItem(LS_KEYS.counties, JSON.stringify(counties));
+      localStorage.setItem(LS_KEYS.state,    JSON.stringify(state));
+      localStorage.setItem(LS_KEYS.meta,     JSON.stringify({ts:Date.now()}));
+    }catch(e){ /* ignore quota */ }
+  }
+
+  async function fetchBoundaries(){
+    // TIGERweb GeoJSON (forced to WGS84)
+    const countiesUrl = 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/1/query?where=STATE%3D%2701%27&outFields=NAME,STATE,COUNTY,NAMELSAD&returnGeometry=true&outSR=4326&f=geojson';
+    const stateUrl    = 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/0/query?where=STATE%3D%2701%27&outFields=NAME,STATE&returnGeometry=true&outSR=4326&f=geojson';
+    const [r1,r2] = await Promise.all([fetch(countiesUrl), fetch(stateUrl)]);
+    if(!r1.ok) throw new Error('Counties HTTP '+r1.status);
+    if(!r2.ok) throw new Error('State HTTP '+r2.status);
+    const [gj1, gj2] = await Promise.all([r1.json(), r2.json()]);
+    return {counties: gj1, state: gj2};
+  }
+
+  function drawBoundaries(gj, sourceLabel){
+    if (countiesLayer) { map.removeLayer(countiesLayer); }
+    if (stateLayer) { map.removeLayer(stateLayer); }
+    countiesLayer = L.geoJSON(gj.counties, { pane:'counties', style: styleCounty, onEachFeature: (f, layer)=>attachCountyEvents(layer) }).addTo(map);
+    stateLayer    = L.geoJSON(gj.state,    { pane:'state',    style: styleState }).addTo(map);
+    showOk(`Counties loaded (${sourceLabel})${gj.counties.features ? ' — '+gj.counties.features.length+' counties' : ''}`);
+  }
+
+  async function loadBoundaries(){
+    clearErr();
+    const cache = getCache();
+    if (cache){
+      drawBoundaries(cache, 'cache');
+      // also refresh in background to keep cache warm (no UI block)
+      try { const fresh = await fetchBoundaries(); setCache(fresh.counties, fresh.state); } catch(_) {}
+      return;
+    }
+    showMsg('Loading county/state outlines…');
+    try{
+      const fresh = await fetchBoundaries();
+      hideMsg();
+      setCache(fresh.counties, fresh.state);
+      drawBoundaries(fresh, 'network');
+    }catch(e){
+      hideMsg();
+      showErr('Boundaries failed: ' + e);
+    }
+  }
+
+  loadBoundaries();
+
+  // Trails fetcher
   async function loadTrailsForBounds(bounds){
     trailsLayer.clearLayers();
     showMsg('Loading trails…');
@@ -228,8 +193,7 @@
         relation["route"="hiking"](${bbox});
         way["highway"~"path|footway|track"]["foot"!~"no"](${bbox});
       );
-      out geom;
-    `;
+      out geom;`;
     const url = 'https://overpass-api.de/api/interpreter';
     try{
       const res = await fetch(url, { method:'POST', body: query, headers:{'Content-Type':'text/plain'} });
@@ -245,5 +209,3 @@
   }
 })();
 </script>
-</body>
-</html>
