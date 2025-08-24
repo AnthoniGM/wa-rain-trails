@@ -1,8 +1,2 @@
 /*
-  Content-Security-Policy: frame-ancestors
-    https://alabamamushroomsociety.org
-    https://www.alabamamushroomsociety.org
-    https://*.wildapricot.org
-    https://*.wildapricot.com
-    https://app.wildapricot.com
-    'self'
+  Content-Security-Policy: frame-ancestors https://alabamamushroomsociety.org https://www.alabamamushroomsociety.org https://*.wildapricot.org https://*.wildapricot.com https://app.wildapricot.com 'self'
