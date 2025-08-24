@@ -31,17 +31,18 @@
     <div><strong>Alabama Rain (Last 7 Days) + Trails</strong></div>
     <div>• Hover a county to highlight it. Click to drill in (county + neighbors).</div>
     <div>• Trails load only in the detail view.</div>
-    <div style="margin-top:6px;font-size:11px">Rain: NOAA RFC QPE (broad). Boundaries: local TopoJSON. Trails: OpenStreetMap.</div>
+    <div style="margin-top:6px;font-size:11px">Rain: NOAA RFC QPE. Boundaries: local TopoJSON. Trails: OpenStreetMap.</div>
   </div>
 </div>
 
 <!-- libs -->
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin></script>
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js" crossorigin></script>
+<script src="https://cdn.jsdelivr.net/npm/esri-leaflet@3.0.11/dist/esri-leaflet.js" crossorigin></script>
 
 <script>
 (async function(){
-  // Small helper UI
+  // UI helpers
   const msg = document.getElementById('msgBox');
   const showMsg = (t)=>{ msg.textContent=t; msg.style.display='block'; };
   const hideMsg = ()=>{ msg.style.display='none'; };
@@ -66,39 +67,38 @@
   map.fitBounds(AL_BOUNDS);
 
   // --- Load local TopoJSON (Alabama counties) ---
-  // Try local file first; if missing, fallback to the raw GitHub source (slower).
   let topo;
   try {
     const r = await fetch('./data/alabama-counties.topo.json');
     if (!r.ok) throw new Error('local 404');
     topo = await r.json();
   } catch {
+    // fallback if the local file isn't present yet
     const r2 = await fetch('https://raw.githubusercontent.com/jethin/us-counties-tracts-topojson/main/counties/01.topo.json');
     topo = await r2.json();
   }
 
   // Convert TopoJSON -> GeoJSON (counties)
-  const countiesFC = topojson.feature(topo, topo.objects[Object.keys(topo.objects)[0]]);
-  // Build adjacency map by touching borders (lightweight)
-  const neighbors = new Map(); // id -> Set of neighbor ids
-  // Use topojson.mesh to find shared arcs quickly
-  const mesh = topojson.mesh(topo, topo.objects[Object.keys(topo.objects)[0]], (a,b)=>a!==b);
-  // Build a bbox index for quick neighbor guess
+  const topoObjName = Object.keys(topo.objects)[0];
+  const countiesFC = topojson.feature(topo, topo.objects[topoObjName]);
+
+  // Build a fast neighbor map (bbox-based)
   const feats = countiesFC.features;
-  feats.forEach((f,i)=>{ f._idx=i; f._bbox = L.geoJSON(f).getBounds(); neighbors.set(i,new Set()); });
+  feats.forEach((f,i)=>{ f._idx=i; f._bbox = L.geoJSON(f).getBounds(); });
+  const neighbors = new Map(); for (let i=0;i<feats.length;i++) neighbors.set(i,new Set());
   for (let i=0;i<feats.length;i++){
     for (let j=i+1;j<feats.length;j++){
       if (feats[i]._bbox.intersects(feats[j]._bbox)) {
-        // Rough bbox intersect -> mark likely neighbors (good enough for counties)
         neighbors.get(i).add(j); neighbors.get(j).add(i);
       }
     }
   }
 
-  // Build Alabama outline (for initial mask) from county union using mesh
-  const stateOutline = L.geoJSON({type:'Feature', geometry: mesh}, {pane:'counties', style:{color:'#000', weight:2.0, fillOpacity:0}}).addTo(map);
+  // Create a state outline mesh to use for the initial mask
+  const mesh = topojson.mesh(topo, topo.objects[topoObjName], (a,b)=>a!==b);
+  L.geoJSON({type:'Feature', geometry: mesh}, {pane:'counties', style:{color:'#000', weight:2, fillOpacity:0}}).addTo(map);
 
-  // County layer (hover highlight)
+  // County layer (hover highlight + click to drill)
   const countiesLayer = L.geoJSON(countiesFC, {
     pane:'counties',
     style: { color:'#444', weight:1.2, fillOpacity:0 },
@@ -116,45 +116,47 @@
     }
   }).addTo(map);
 
-  // Visual mask helper: darken everything outside a polygon (or union)
+  // Visual mask: show only inside provided polygon(s)
   let maskLayer = null;
   function setMask(allowedGeoJSON){
     if (maskLayer) { map.removeLayer(maskLayer); maskLayer = null; }
-    // Create a giant world polygon with "holes" where we want to see the map
     const world = [[-90,-180],[-90,180],[90,180],[90,-180]];
     const holes = [];
     const addHole = (geom) => {
       if (geom.type === 'Polygon') holes.push(geom.coordinates[0].map(([x,y])=>[y,x]));
       if (geom.type === 'MultiPolygon') geom.coordinates.forEach(r=>holes.push(r[0].map(([x,y])=>[y,x])));
+      if (geom.type === 'MultiLineString' || geom.type === 'LineString') return; // ignore
     };
     if (allowedGeoJSON.type === 'FeatureCollection') allowedGeoJSON.features.forEach(f=>addHole(f.geometry));
     else if (allowedGeoJSON.type === 'Feature') addHole(allowedGeoJSON.geometry);
     else addHole(allowedGeoJSON);
-
-    maskLayer = L.polygon([world, ...holes], {
-      pane:'mask',
-      stroke:false, fill:true, fillColor:'#000', fillOpacity:0.35, interactive:false
-    }).addTo(map);
+    maskLayer = L.polygon([world, ...holes], { pane:'mask', stroke:false, fill:true, fillColor:'#000', fillOpacity:0.35, interactive:false }).addTo(map);
   }
 
-  // Initial mask to Alabama (union of all counties) – use state outline geometry mesh as allowed area
+  // Initial mask = entire Alabama (from mesh)
   setMask({type:'Feature', geometry: mesh});
 
-  // Rain raster (broad, low-zoom)
-  const rain = L.tileLayer.wms('https://nowcoast.noaa.gov/arcgis/services/nowcoast/analysis_meteohydro_sfc_qpe_time/MapServer/WMSServer', {
-    layers: '5', format:'image/png', transparent:true, pane:'rain', opacity:0.45
+  // --- Rain raster (NOAA RFC QPE, last 7 days) ---
+  let rain = L.esri.dynamicMapLayer({
+    url: 'https://mapservices.weather.noaa.gov/raster/rest/services/obs/rfc_qpe/MapServer',
+    layers: [56],          // "Last 7 Days Observed" image layer
+    opacity: 0.45,
+    f: 'image',
+    pane: 'rain'
   }).addTo(map);
+
   document.getElementById('rainToggle').addEventListener('change', e=>{
+    if (!rain) return;
     e.target.checked ? rain.addTo(map) : map.removeLayer(rain);
   });
 
-  // Trails layer (only in county view)
-  const trailsLayer = L.geoJSON(null, { pane:'trails', style:{color:'#0066cc', weight:3} }).addTo(map);
+  // --- Trails (red) — only used in county view ---
+  const trailsLayer = L.geoJSON(null, { pane:'trails', style:{ color:'#d32f2f', weight:3.5 } }).addTo(map);
   document.getElementById('trailsToggle').addEventListener('change', e=>{
     e.target.checked ? trailsLayer.addTo(map) : map.removeLayer(trailsLayer);
   });
 
-  // Enter county view: mask to county + neighbors, zoom, then fetch trails within that bbox
+  // Enter county view: mask to county + neighbors, zoom, then fetch trails for that bbox
   async function enterCountyView(countyFeature){
     showMsg('Loading county + neighbors…');
 
@@ -165,15 +167,15 @@
     setMask(fc); // mask to county + adjacent counties
     backBtn.style.display = 'inline-block';
 
-    // Zoom to selected county (with a little padding)
+    // Zoom to selected county (with padding)
     const bounds = L.geoJSON(countyFeature).getBounds();
     map.fitBounds(bounds.pad(0.15));
 
-    // Trails: only load inside the mask area (small bbox)
+    // Trails: fetch only within that county bbox
     trailsLayer.clearLayers();
     showMsg('Loading trails…');
     try{
-      const b = bounds; // bbox lat/lng
+      const b = bounds;
       const bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()].join(',');
       const q = `
         [out:json][timeout:25];
@@ -183,7 +185,8 @@
         ); out geom;`;
       const res = await fetch('https://overpass-api.de/api/interpreter', {method:'POST', headers:{'Content-Type':'text/plain'}, body:q});
       const data = await res.json();
-      // Minimal osmtogeojson replacement: Overpass returns GeoJSON-like "geometry" arrays; convert lines quickly
+
+      // Convert Overpass ways/relations with geometry to simple GeoJSON lines
       const features = [];
       if (data.elements) {
         for (const el of data.elements) {
@@ -196,7 +199,7 @@
       if (features.length === 0) showMsg('No mapped trails here yet (OSM).'); else hideMsg();
       trailsLayer.addData({type:'FeatureCollection', features});
     }catch(e){
-      showMsg('Trails server busy. Try again.');
+      showMsg('Trails are busy. Try again.');
       console.error(e);
     }
   }
@@ -207,7 +210,6 @@
     map.fitBounds(AL_BOUNDS);
     backBtn.style.display = 'none';
   });
-
 })();
 </script>
 </body>
