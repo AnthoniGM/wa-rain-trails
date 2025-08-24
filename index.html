@@ -7,10 +7,9 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" crossorigin>
 <style>
   html,body{margin:0;height:100%}
-  /* The iframe controls height; this fills 100% of iframe */
   #app{height:100%;position:relative;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
   #map{height:100%}
-  .toolbar{position:absolute;top:10px;left:10px;z-index:1200;background:#fff;border-radius:12px;padding:8px 10px;box-shadow:0 2px 10px rgba(0,0,0,.12);display:flex;gap:10px;align-items:center;font-size:14px}
+  .toolbar{position:absolute;top:10px;left:10px;z-index:1200;background:#fff;border-radius:12px;padding:8px 10px;box-shadow:0 2px 10px rgba(0,0,0,.12);display:flex;gap:10px;align-items:center;font-size:14px;flex-wrap:wrap}
   .btn{cursor:pointer;border:none;border-radius:10px;padding:6px 10px;background:#f2f2f2}
   .btn:hover{background:#e8e8e8}
   .legend{position:absolute;bottom:10px;left:10px;z-index:1100;background:#fff;border-radius:12px;padding:8px 10px;box-shadow:0 2px 10px rgba(0,0,0,.12);font-size:12px;max-width:300px;line-height:1.35}
@@ -34,6 +33,13 @@
       <span id="opacityVal">0.45</span>
     </div>
 
+    <!-- NEW: Days slider -->
+    <div class="slider-wrap" title="Cumulative days of observed precipitation">
+      <span>Days</span>
+      <input id="daysSlider" class="slider" type="range" min="0" max="8" step="1" />
+      <span id="daysVal">7</span>
+    </div>
+
     <label><input id="trailsToggle" type="checkbox" checked> Trails</label>
   </div>
 
@@ -42,10 +48,12 @@
   <div id="map"></div>
 
   <div class="legend">
-    <div><strong>Alabama Rain (Last 7 Days) + Trails</strong></div>
+    <div><strong>Alabama Rain (Last <span id="legendDays">7</span> Days) + Trails</strong></div>
     <div>• Hover a county to highlight it. Click to drill in (county + neighbors).</div>
     <div>• Trails: hover for name, click to copy coords.</div>
-    <div style="margin-top:6px;font-size:11px">Rain: NOAA RFC QPE. Boundaries: local TopoJSON. Trails: OpenStreetMap.</div>
+    <div style="margin-top:6px;font-size:11px">
+      Rain: NOAA RFC QPE (fixed multi‑day composites 1–14 days; 21‑day not provided by this service). Trails: OpenStreetMap.
+    </div>
   </div>
 </div>
 
@@ -62,6 +70,25 @@
   const DEFAULT_RAIN   = params.get('rain')   !== '0'; // default on
   const DEFAULT_TRAILS = params.get('trails') !== '0'; // default on
 
+  // NOAA provides fixed multi-day composites. We'll snap to these stops:
+  // index:   0 1 2 3 4 5 6 7  8
+  const DAYS_STOPS = [1,2,3,4,5,6,7,10,14];
+  // Map "days" to ArcGIS Image layer IDs (Observed → Image for Last N Days)
+  // Source lists: 1d img=28, 2d=36, 3d=40, 4d=44, 5d=48, 6d=52, 7d=56, 10d=60, 14d=64. :contentReference[oaicite:1]{index=1}
+  const LAYER_BY_DAYS = {1:28, 2:36, 3:40, 4:44, 5:48, 6:52, 7:56, 10:60, 14:64};
+
+  // Optional URL param to set initial days (snaps to nearest stop)
+  const urlDays = parseInt(params.get('days') || '7', 10);
+  function nearestStopIndex(n){
+    let bestI=0, bestDiff=Infinity;
+    for (let i=0;i<DAYS_STOPS.length;i++){
+      const d = Math.abs(DAYS_STOPS[i]-n);
+      if (d<bestDiff){ bestDiff=d; bestI=i; }
+    }
+    return bestI;
+  }
+  const DEFAULT_DAYS_INDEX = nearestStopIndex(isNaN(urlDays)?7:urlDays);
+
   // UI helpers
   const msg = document.getElementById('msgBox');
   const showMsg = (t)=>{ msg.textContent=t; msg.style.display='block'; };
@@ -74,10 +101,22 @@
   const trailsToggleEl = document.getElementById('trailsToggle');
   const sliderEl       = document.getElementById('opacitySlider');
   const opValEl        = document.getElementById('opacityVal');
+  const daysSliderEl   = document.getElementById('daysSlider');
+  const daysValEl      = document.getElementById('daysVal');
+  const legendDaysEl   = document.getElementById('legendDays');
+
   rainToggleEl.checked   = DEFAULT_RAIN;
   trailsToggleEl.checked = DEFAULT_TRAILS;
   sliderEl.value         = DEFAULT_OPACITY.toString();
   opValEl.textContent    = DEFAULT_OPACITY.toFixed(2);
+
+  // Init days slider
+  daysSliderEl.min = 0;
+  daysSliderEl.max = DAYS_STOPS.length - 1;
+  daysSliderEl.step = 1;
+  daysSliderEl.value = DEFAULT_DAYS_INDEX.toString();
+  daysValEl.textContent = DAYS_STOPS[DEFAULT_DAYS_INDEX];
+  legendDaysEl.textContent = DAYS_STOPS[DEFAULT_DAYS_INDEX];
 
   // Bounds for Alabama
   const AL_BOUNDS = L.latLngBounds([30.137,-88.473],[35.008,-84.889]);
@@ -122,10 +161,7 @@
   const countiesFC = topojson.feature(topo, topo.objects[topoObjName]);
 
   // Build a true state polygon (union of all counties) for masking
-  const STATE_POLY = topojson.merge(
-    topo,
-    topo.objects[topoObjName].geometries
-  ); // MultiPolygon geometry
+  const STATE_POLY = topojson.merge(topo, topo.objects[topoObjName].geometries);
 
   // Neighbor map (bbox-based)
   const feats = countiesFC.features;
@@ -181,26 +217,41 @@
     }).addTo(map);
   }
 
-  // ✅ Statewide mask now uses real polygon (STATE_POLY), so rain shows at state view
+  // Statewide mask uses real polygon so rain shows at state view
   setMask({type:'Feature', geometry: STATE_POLY});
 
-  // --- Rain raster (NOAA RFC QPE, last 7 days) ---
+  // --- Rain raster (NOAA RFC QPE, multi-day observed) ---
+  function currentDays(){ return DAYS_STOPS[ parseInt(daysSliderEl.value,10) ]; }
+  function currentLayerId(){ return LAYER_BY_DAYS[ currentDays() ]; }
+
   let rain = L.esri.dynamicMapLayer({
     url: 'https://mapservices.weather.noaa.gov/raster/rest/services/obs/rfc_qpe/MapServer',
-    layers: [56],                // "Last 7 Days Observed" image layer
-    opacity: DEFAULT_OPACITY,    // from URL or default
+    layers: [ currentLayerId() ],         // Last N Days Observed (Image)
+    opacity: DEFAULT_OPACITY,
     f: 'image',
     pane: 'rain'
   }).addTo(map);
 
-  // Rain toggle + opacity slider
+  // Rain toggle + opacity + days slider
   function setOpacity(v){ if(rain && rain.setOpacity){ rain.setOpacity(v); opValEl.textContent=(+v).toFixed(2);} }
+  function setDaysFromSlider(){
+    const d = currentDays();
+    const lyr = currentLayerId();
+    legendDaysEl.textContent = d;
+    daysValEl.textContent = d;
+    // swap the layer efficiently
+    if (rain && typeof rain.setLayers==='function'){ rain.setLayers([lyr]); }
+  }
+
   document.getElementById('rainToggle').addEventListener('change', e=>{
     if (!rain) return;
     e.target.checked ? rain.addTo(map) : map.removeLayer(rain);
   });
   sliderEl.addEventListener('input', (e)=> setOpacity(e.target.value));
+  daysSliderEl.addEventListener('input', setDaysFromSlider);
+
   setOpacity(DEFAULT_OPACITY);
+  setDaysFromSlider();
   if (!DEFAULT_RAIN) map.removeLayer(rain); // honor URL param
 
   // --- Trails (RED) — used in county+neighbors view ---
@@ -297,10 +348,10 @@
     }
   }
 
-  // Back to statewide view (now uses STATE_POLY so you can select new counties)
+  // Back to statewide view
   backBtn.addEventListener('click', ()=>{
     trailsLayer.clearLayers();
-    setMask({type:'Feature', geometry: STATE_POLY}); // statewide “hole”
+    setMask({type:'Feature', geometry: STATE_POLY}); // statewide mask
     map.fitBounds(AL_BOUNDS);
     backBtn.style.display = 'none';
     hideMsg();
